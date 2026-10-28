@@ -216,3 +216,10 @@ def test_checksum_reads_bounded_chunks(payload, monkeypatch):
             return self.stream.read(size)
     monkeypatch.setattr(Path, "open", lambda self, *args, **kwargs: GuardedReader(original_open(self, *args, **kwargs)))
     assert len(sha256_file(payload)) == 64 and sizes
+
+
+def test_legacy_duplicate_wrong_dataset_is_not_accepted(cfg, payload):
+    body = receipt(payload, "DUPLICATE", original_filename="another_station.csv")
+    with pytest.raises(UploadError, match="logical observation"):
+        run(cfg, payload, lambda _: httpx.Response(200, json=body))
+    assert not list((cfg.root / "data/uploaded").glob("*"))

@@ -20,6 +20,11 @@ class Config:
     max_bytes: int = 20 * 1024 * 1024
     retries: int = 3
     root: Path = ROOT
+    worker_max_attempts: int = 12
+    source_enabled: dict = field(default_factory=lambda: {s: True for s in ROLES["all"]})
+
+    def permits(self, source):
+        return source in ROLES[self.role] and self.source_enabled.get(source, False)
 
     @classmethod
     def load(cls, path=ROOT / ".env", *, require_key=True):
@@ -35,7 +40,7 @@ class Config:
         if not valid:
             raise ValueError("SERVER_BASE_URL must be an HTTP(S) server URL without credentials/query/fragment")
         key = (values.get("SERVER_API_KEY") or "").strip()
-        if require_key and (not key or key == "REPLACE_WITH_CLIENT_API_KEY"):
+        if require_key and (not key or key.startswith("REPLACE_WITH")):
             raise ValueError("SERVER_API_KEY is missing")
         role = values.get("CLIENT_ROLE", "all")
         if role not in ROLES:
@@ -44,7 +49,18 @@ class Config:
             timeout = float(values.get("REQUEST_TIMEOUT", "120"))
             mb = float(values.get("MAX_FILE_SIZE_MB", "20"))
             retries = int(values.get("UPLOAD_RETRY_COUNT", "3"))
-            assert math.isfinite(timeout) and timeout > 0 and 0 < mb <= 20 and 0 <= retries <= 10
-        except (ValueError, AssertionError):
+            if not (math.isfinite(timeout) and timeout > 0 and 0 < mb <= 20 and 0 <= retries <= 10):
+                raise ValueError()
+        except ValueError:
             raise ValueError("Invalid timeout, size (0 < MB <= 20), or retry count (0..10)") from None
-        return cls(values.get("CLIENT_ID", "local-client"), role, url, key, timeout, int(mb * 1024 * 1024), retries)
+        maximum = int(values.get("WORKER_MAX_ATTEMPTS", "12"))
+        if not 1 <= maximum <= 100:
+            raise ValueError("WORKER_MAX_ATTEMPTS must be 1..100")
+        enabled = {}
+        for source in ROLES["all"]:
+            value = str(values.get(f"SOURCE_{source.upper()}_ENABLED", "true")).lower()
+            if value not in {"true", "false"}:
+                raise ValueError("Source enabled flags must be true/false")
+            enabled[source] = value == "true"
+        return cls(values.get("CLIENT_ID", "collector01"), role, url, key, timeout, int(mb * 1024 * 1024), retries,
+                   worker_max_attempts=maximum, source_enabled=enabled)

@@ -1,110 +1,127 @@
-# Climate Collector — Phase 1
+# Climate Collector ? Stage 1.5
 
-Client Python 3.11/3.12 dùng chung cho USDM, NOAA, USGS và NLDAS. Hợp đồng API
-được đối chiếu trực tiếp với `../climate-platform/server/{main,ingestion,security,metadata,config}.py`.
-Không sửa mã Server. Theo yêu cầu hiện tại, bỏ qua kết nối và upload Server thật;
-HTTP mocking không phải bằng chứng tương thích với một Server đang triển khai.
+**1 CLIENT ? 1 SERVER.** M?t physical Client ch?y b?n module USDM, NOAA, USGS, NLDAS,
+d?ng persistent queue, HTTPX streaming v? worker g?i l?i khi Server ph?c h?i.
+Collector th?t hi?n v?n l? skeleton; demo d?ng CSV mock nh?, kh?ng ph?i d? li?u khoa h?c.
 
-## Cài đặt và cấu hình
-
-Trong PowerShell, clone repo và chạy các lệnh tại thư mục gốc:
-
-```powershell
-git clone https://github.com/phamquocanh149/IT5425_DataLakeHouse_Client.git
-cd IT5425_DataLakeHouse_Client
-py -3.11 -m venv .venv
-.\.venv\Scripts\python.exe -m pip install -r requirements.txt
-Copy-Item .env.example .env
-.\.venv\Scripts\python.exe -m pytest -q
+```mermaid
+flowchart LR
+    A[USDM / NOAA / USGS / NLDAS] --> B[Pending snapshot + JSON job]
+    B --> C[HTTPX uploader / retry worker]
+    C -->|HTTPS Tailscale| D[FastAPI Server]
+    D --> E[Bronze raw + SQLite registry]
+    D -->|VERIFIED or DUPLICATE + checksum| F[Uploaded job]
 ```
 
-Máy hiện tại đã có `.venv` riêng dùng Python 3.11.0, được tạo từ Python của
-`climate-platform/.venv`. Không cần activate hoặc thay đổi ExecutionPolicy.
-`requirements-lock.txt` ghi phiên bản đã cài để có thể tái tạo môi trường.
+## C?i ??t Windows
 
-Sau khi sao chép `.env.example`, chọn `CLIENT_ROLE` phù hợp (dùng `all` cho cả bốn nguồn).
-Điền `SERVER_BASE_URL` và `SERVER_API_KEY` được Server cấp. Không commit `.env`.
-Biến môi trường hệ điều hành ưu tiên hơn `.env`; đường dẫn `.env` dựa vào vị trí
-project nên dùng được trong Task Scheduler.
+```powershell
+git clone https://github.com/phamquocanh149/IT5425_DataLakeHouse_Client.git climate-collector
+cd climate-collector
+py -3.11 -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -r requirements.txt
+if (!(Test-Path .env)) { Copy-Item .env.example .env }
+```
 
-| Vai trò | CLIENT_ID (chỉ dùng cục bộ) | CLIENT_ROLE |
-|---|---|---|
-| Client 01 | client01 | usdm_noaa |
-| Client 02 | client02 | nldas_usgs |
-| Client dùng chung | local-client | all |
+D?ng Python 3.11/3.12. `.env`: `CLIENT_ID=collector01`, `CLIENT_ROLE=all`,
+`SERVER_API_KEY` b?ng `COLLECTOR_API_KEY` Server c?p; kh?ng d?ng Admin key.
+`CLIENT_ID` ch? d?ng c?c b?, Server l?y danh t?nh t? kh?a. URL loopback trong m?u ch?
+cho demo c?ng m?y; hai m?y ph?i d?ng URL HTTPS Tailscale c?a Server.
+Kh?ng commit `.env`, kh?ng sao ch?p `.venv` gi?a m?y; bi?n m?i tr??ng ?u ti?n h?n `.env`.
+`SOURCE_<USDM|NOAA|USGS|NLDAS>_ENABLED=true/false` ?i?u khi?n t?ng ngu?n; tr?ng th?i t?ng job
+c? source v? worker ghi th?ng k? ri?ng trong `data/source_status.json`.
+C?c role c? v?n ??c ???c nh?ng kh?ng ph?i workflow m?c ??nh.
 
-Vai trò `all` chỉ mở cả bốn nguồn ở Client. Server vẫn quyết định danh tính theo
-API key; không gửi `CLIENT_ID` trong multipart. Dùng khóa Client 01 sẽ được Server
-ghi nhận là Client 01, kể cả khi cấu hình local-client/all.
-
-Nếu chạy Server **trên cùng máy này**, có thể đặt URL `http://127.0.0.1:8000` sau khi
-bạn khởi động Server. Khi tách máy, phải đổi sang IP/hostname Server truy cập được
-qua LAN/Tailscale; tuyệt đối không dùng localhost cho Server ở máy khác.
-Client luôn kiểm tra chứng chỉ HTTPS và không tự theo redirect mang API key.
-
-## Chạy thủ công
+## G?i file
 
 ```powershell
 .\.venv\Scripts\python.exe scripts/check_server.py
 .\.venv\Scripts\python.exe scripts/generate_sample.py --source usdm
-.\.venv\Scripts\python.exe scripts/send_file.py --file data/pending/sample_usdm.csv --source usdm --date 2021-06-22
+.\.venv\Scripts\python.exe scripts/send_file.py --file data/pending/sample_usdm.csv --source usdm --date 2021-06-22 --dataset-key usdm/demo
 ```
 
-Với USGS, tạo mẫu bằng `--source usgs`, rồi gửi `sample_usgs.csv` với `--source usgs`.
-Hai CSV nhỏ hơn 1 MB là **mock data kiểm tra truyền file, không phải dữ liệu khoa học**.
-Collector thật hiện là skeleton và báo `NotImplementedError`, không tự tải dữ liệu.
+?? g?i NOAA c? th? d?ng c?ng mock file v?i `--source noaa --dataset-key noaa/demo`.
+Gi?i h?n m?c ??nh 20 MiB; kh?ng ??c nguy?n file v?o RAM, timeout c?u h?nh ???c, lu?n
+ki?m tra ch?ng ch? TLS. Kh?ng theo redirect mang key. Gi? nguy?n file ngu?n.
 
-## Hợp đồng đã đọc từ source Server
+API gi? `/health`, `/upload`, `/uploads`, header X-API-Key v? multipart file/source/source_date.
+Th?m `dataset_key` t?y ch?n: ??nh danh ?n ??nh s?n ph?m/tr?m/ch? s?; m?c ??nh filename g?c.
+Server m?i tr? HTTP 200 VERIFIED/DUPLICATE v? metadata; Client ki?m tra source, ng?y,
+dataset_key, checksum v? size tr??c khi x?c nh?n. Response Server c? thi?u dataset_key
+ch? ???c ch?p nh?n khi key b?ng filename. Xem [API contract](docs/API_CONTRACT.md).
 
-| Endpoint | Hành vi |
-|---|---|
-| GET /health | Không cần key; status=ok, service=climate-data-server |
-| POST /upload | Header X-API-Key; multipart file, source, source_date |
-| GET /uploads | Cần key; trả list metadata; có filter source tùy chọn |
+## Persistent queue v? worker
 
-- File mới: HTTP 200, `status=VERIFIED`, metadata có `file_id`, `sha256`, `size_bytes`, `status=VERIFIED`.
-- File trùng: **HTTP 200**, `status=DUPLICATE`, metadata của bản cũ. Không coi HTTP 409 là thành công.
-- Server mặc định giới hạn 20 × 1024 × 1024 byte; file rỗng bị từ chối.
-  Cấu hình Server có thể ghi đè giới hạn: cần xác minh khi triển khai; Client chỉ cho phép <=20 MiB.
-- Thiếu/sai khóa: 401; source/ngày/file rỗng sai: 400; quá lớn: 413; thiếu field: 422.
-- Không gửi checksum như field mới; Client so SHA-256 và kích thước với metadata trả về.
-- Server chống trùng theo hash toàn cục, không theo source/ngày/client. Nếu source/ngày
-  khác bản có sẵn, Client giữ pending để người vận hành kiểm tra. Không đổi giao thức
-  hay tuyên bố Server đã lưu metadata quan sát mới.
-- Không có khác biệt tên endpoint/field so với đề bài. Response và duplicate trước đó
-  chưa được đề bài quy định cụ thể; triển khai dùng hành vi trong code Server.
+```powershell
+.\.venv\Scripts\python.exe scripts/retry_pending.py --once
+.\.venv\Scripts\python.exe scripts/retry_pending.py --watch --interval 10
+```
 
-## Lưu trữ, retry và xác nhận
+`send_file.py` t?o `data/pending/<job_id>/payload` v? metadata.json, fsync payload tr??c
+khi ghi metadata nguy?n t?. Retry worker d?ng l?i job_id, filename, source, ng?y,
+dataset_key v? payload; **kh?ng t?o snapshot ho?c job m?i**. C? uploader l?n worker d?ng
+OS file lock trong `data/locks`; kernel gi?i ph?ng lock khi process ch?t, kh?ng ph?i x?a
+lock file th? c?ng. Backoff v? attempts ???c ghi tr??c request ?? restart kh?ng reset budget.
 
-Mỗi lần gửi tạo job UUID với snapshot `data/pending/<job>/payload` và `metadata.json`.
-Đọc/copy/hash theo chunk; HTTPX stream file object; mỗi retry mở lại từ byte 0.
-Không sửa hoặc xóa file người dùng đưa vào. Snapshot được chuyển sang
-`data/uploaded/<job>/` khi response HTTP 200 xác nhận trạng thái và checksum/kích thước.
-Nếu `/uploads` không truy cập được hoặc thiếu bản ghi, `listing_check` thể hiện rõ;
-response upload đã xác nhận vẫn là bằng chứng tiếp nhận, không giả lập kết quả list.
+Client state: `PENDING ? UPLOADING ? UPLOADED`; l?i t?m ? `RETRY_PENDING`; l?i c?n s?a
+? `NEEDS_ATTENTION`. `server_status` ri?ng l? VERIFIED ho?c DUPLICATE. VERIFIED ch? c?
+ngh?a Bronze v? metadata ?? ???c x?c nh?n, ch?a ph?i Silver/Gold.
 
-Lỗi giữ payload trong pending; `data/failed/<job>.json` là báo cáo trỏ tới payload,
-không di chuyển dữ liệu chưa được xác nhận ra khỏi pending. Gửi lại bằng cùng lệnh
-với file nguồn hoặc đường dẫn payload trong báo cáo; một job mới được tạo và Server
-chống trùng theo hash. Filename gửi lại từ payload sẽ là `payload`, nhưng bản trùng
-giữ metadata tên gốc ở Server. Không tự quét/gửi lại mọi file trong pending.
+- M?i l?n upload tr?c ti?p retry t?i ?a `UPLOAD_RETRY_COUNT` (m?c ??nh 3 l?n sau l?n ??u).
+- T?ng request t? ??ng cho m?t job b? ch?n b?i `WORKER_MAX_ATTEMPTS` (m?c ??nh 12),
+  k? c? qua restart. Worker m?i v?ng ch? g?i m?t l?n/job ??n h?n, ki?m tra health tr??c.
+- Retry network/timeout v? 408/429/500/502/503/504. Backoff trong l?n g?i 1,2,4? t?i ?a
+  30s; gi?a v?ng worker 2^attempts t?i ?a 1024s. Kh?ng g?i l?i s?m h?n deadline ?? l?u.
+- 400/401/403/404/409/413/422 ho?c checksum/identity sai: NEEDS_ATTENTION; kh?ng t? retry.
+- Ctrl+C d?ng watch sau request hi?n t?i, t?i ?a ch? timeout; kh?ng t? c?i Service/Task.
+- `failed/<job_id>.json` l? b?o c?o, payload v?n ? pending. Ch? chuy?n nguy?n th? m?c
+  sang uploaded sau x?c nh?n. N?u crash sau l?u acknowledgement nh?ng tr??c rename,
+  worker ho?n t?t move m? kh?ng upload l?i. L?i record/incomplete snapshot ???c b?o,
+  kh?ng t? x?a file. Snapshot ch?a ho?n t?t kh?ng ???c g?i.
+- Pending Phase 1 c? metadata c? ???c n?ng c?p khi ??c; CSV r?i ch?a c? job metadata
+  kh?ng t? g?i. D?ng send_file l?n ??u cho c?c file n?y.
 
-`UPLOAD_RETRY_COUNT=3` nghĩa là tối đa 3 lần thử lại sau lần đầu (4 requests).
-Backoff 1, 2, 4 giây, tối đa 30 giây; retry timeout, network/protocol error và
-HTTP 408/429/500/502/503/504. Không retry 400/401/403/409/413/422.
-Metadata lưu số lần retry, HTTP status, trạng thái thật từ Server, checksum, thời gian,
-file ID và kết quả đối chiếu danh sách. Nhật ký thành công là JSON trong `logs/`.
-Lỗi không ghi response body hoặc chuỗi exception mạng có thể chứa credentials.
+Khi NEEDS_ATTENTION: s?a URL/key/quy?n/payload r?i x? l? c? ch? ??ch. Kh?ng t? reset
+budget. C? th? g?i l?i file ngu?n th?nh job m?i b?ng send_file sau khi x?c ??nh l?i ??
+kh?c ph?c; record l?i c? gi? l?m audit. Kh?ng t? s?a raw ho?c ??i ng?y/source ?? n? l?i.
 
-## Windows Task Scheduler (sau khi kiểm thử Server thật thành công)
+## Server v? metadata
 
-Chưa đăng ký scheduled task. Khi sẵn sàng, Create Task và cấu hình:
+Server ch?ng tr?ng theo `(source, source_date, dataset_key, sha256)`; c?ng bytes kh?c ng?y
+v?n l? observation m?i. ??i bytes t?o revision, kh?ng ghi ??; retry revision c? tr? b?n
+c?, kh?ng thay current. Physical blob c? th? d?ng chung gi?a observation.
+SQLite n?m tr?n Server (`metadata/ingestion.sqlite3`), kh?ng truy c?p tr?c ti?p qua m?ng.
+Collector ch? xem metadata c?a m?nh v? source ???c c?p quy?n; Admin xem t?t c?.
+Server c? migration JSON v? reconciliation; xem README repo Server.
 
-- Program: đường dẫn tuyệt đối tới `.venv\Scripts\python.exe` trong repo.
-- Arguments: `scripts/send_file.py --file data/pending/sample_usdm.csv --source usdm --date 2021-06-22`.
-- Start in: đường dẫn tuyệt đối thư mục gốc repo `IT5425_DataLakeHouse_Client`.
-- Chọn tài khoản có quyền đọc `.env` và ghi data/logs; đặt trigger theo nhu cầu;
-  chọn không khởi chạy instance mới nếu task đang chạy. Exit code 0 là thành công, 1 là lỗi.
+## Ki?m th?
 
-Lệnh trên chỉ minh họa gửi một file cố định. Trước lịch thu thập thật cần triển khai
-collector tạo file và ngày tương ứng, kiểm thử URL/key thật và kiểm tra giới hạn Server.
+```powershell
+.\.venv\Scripts\python.exe -m pytest -q
+```
+
+HTTP integration th?t n?m trong repo Server, ch?y c? hai codebase:
+
+```powershell
+cd ..\climate-platform
+$env:CLIENT_REPO_PATH=(Resolve-Path ..\climate-collector).Path
+.\.venv\Scripts\python.exe -m pytest tests/integration -q
+```
+
+Test d?ng temporary keys/storage, g?m offline/restart v? hai process g?i ??ng th?i.
+Xem [demo 5?7 ph?t](docs/STAGE_1_5_DEMO.md), [validation](VALIDATION.md).
+
+## HTTPS Tailscale tr?n hai m?y
+
+C? hai m?y v?o c?ng tailnet, ???c c?p quy?n. Server gi? Uvicorn t?i 127.0.0.1:8000;
+ng??i v?n h?nh b?t HTTPS certificates v? d?ng `tailscale serve --bg 8000` tr?n Server.
+?i?n URL HTTPS tr? v? v?o SERVER_BASE_URL Client. Kh?ng d?ng localhost khi Server ?
+m?y kh?c, kh?ng t?t TLS. Ch? cung c?p h??ng d?n; ch?a ch?y smoke test hai m?y th?c t?.
+[T?i li?u Tailscale Serve](https://tailscale.com/docs/reference/tailscale-cli/serve).
+
+## Ph?m vi hi?n t?i
+
+Worker tu?n t?, tr?ng th?i local filesystem, ch?a c? daemon/Task Scheduler t? c?i.
+C?c downloader v? Historical Replay thu?c Stage 2; Silver/Gold thu?c Stage 3,
+ch?a tri?n khai. Khi m? r?ng, gi? dataset_key ?n ??nh v? m?i ngu?n c? checkpoint ri?ng,
+??a raw v?o enqueue_file r?i ?? worker ph? tr?ch truy?n.
